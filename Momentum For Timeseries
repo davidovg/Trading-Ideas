@@ -1,0 +1,127 @@
+import os, time
+import sys
+
+import numpy as np
+import pandas as pd
+from sqlalchemy import create_engine
+from datetime import datetime
+import momentum_utils as au
+import re, ast
+from quant_utils import *
+from my_pd2ppt import *
+from pdf_utils import *
+import matplotlib.pyplot as plt
+#from xbbg import blp
+from SOURCEWRAPPERS import BbgWrapper
+
+
+
+# CAT MOMENTUM
+def compute_mom(data, categories_lag_months):
+    data_mom = None
+    for mom_len in categories_lag_months:
+        m = data.apply(au.get_momentum, axis=0, raw=True,
+                   args=(mom_len * 22, smoothing_intervals)) * 12 / mom_len / len(categories_lag_months)
+    data_mom = m if data_mom is None else data_mom + m
+    data_mom = data_mom.dropna()
+    return data_mom
+
+def binarize(ts):
+    bin_list = pd.DataFrame(index=ts.index,columns=ts.columns)
+    for j in range(ts.shape[1]):
+        for i in range(1,len(ts)):
+            if (ts.iloc[i][j]>ts.iloc[i-1][j]):
+                bin_list.iloc[i][j] = 1
+            else:
+                bin_list.iloc[i][j] = -1
+    return bin_list
+
+
+def binarize_perc(ts):
+    bin_list = pd.DataFrame(index=ts.index,columns=ts.columns)
+    for j in range(ts.shape[1]):
+        for i in range(1,len(ts)):
+            if (ts.iloc[i][j]>1.1*ts.iloc[i-1][j]):
+                bin_list.iloc[i][j] = 1
+            elif (ts.iloc[i][j] < 0.909 * ts.iloc[i - 1][j]):
+                bin_list.iloc[i][j] = -1
+            else:
+                bin_list.iloc[i][j] = 0
+    return bin_list
+
+
+
+def binarize_perc_new(ts):
+    bin_list = pd.DataFrame(index=ts.index,columns=ts.columns)
+    for j in range(ts.shape[1]):
+        for i in range(1,len(ts)):
+            if (ts.iloc[i][j]-ts.iloc[i-1][j] > 1.1*(ts.iloc[i-1][j]-ts.iloc[i-2][j])):
+                bin_list.iloc[i][j] = 1
+            elif ((ts.iloc[i][j]-ts.iloc[i-1][j]) < 0.5 * (ts.iloc[i-1][j]-ts.iloc[i-2][j])):
+                bin_list.iloc[i][j] = -1
+            else:
+                bin_list.iloc[i][j] = 0
+    return bin_list
+
+
+
+def predb(ts,k):
+    pos_list = pd.DataFrame(index=ts.index, columns=ts.columns)
+    for j in range(ts.shape[1]):
+        for i in range(1,(len(ts)-k+1)):
+            if (((ts.iloc[i:(i+k)]).sum())[j]==k):
+                pos_list.iloc[i+k-1][j] = 1
+            elif (((ts.iloc[i:(i+k)]).sum())[j]==-k):
+                pos_list.iloc[i+k-1][j] = -1
+            else:
+                pos_list.iloc[i+k-1][j] = 0
+    return pos_list
+
+def longeststreak(ts):
+    pos_list = pd.DataFrame(index=ts.index, columns=ts.columns)
+    streak = [0]
+    n = 0
+    for j in range(ts.shape[1]):
+        for i in range(1,(len(ts)-1)):
+            if (ts.iloc[i+1,j]==ts.iloc[i,j]):
+                streak[n] += 1
+            else:
+                streak.append(0)
+                n += 1
+    return max(streak)
+
+
+#momentum parameters
+mom_lag = 3  # business days before end of month
+categories_lag_months = [6, 2]
+smoothing_intervals = 2
+
+
+#interval for momentum computation
+endDate = fromDate2YYYYMMDD(datetime.today())
+startDate = fromDate2YYYYMMDD(datetime.today() - timedelta(days=2000))
+field = "px_last"
+
+#choose bloomberg tickers
+futures = ["CAC Index", "SX5E Index", "DAX Index", "FTSEMIB Index", "SXAE Index", "UXA Index", "COA Comdty", "RXA Comdty", "EURUSD Curncy", "VIX Index", "SX7E Index", "NDX Index", "SPX Index"]
+
+futures = pd.DataFrame(futures, columns=['SecApi'])
+futures.SecApi
+
+
+#Download-Upload from BBG
+bg = BbgWrapper()
+nrows = futures.shape[0]
+
+
+futures_df = pd.DataFrame()
+for i in range(nrows):
+    data = bg.con.bdh(futures.SecApi.iloc[i], field, startDate, endDate)
+    futures_df = pd.concat((futures_df, data),axis=1)
+
+futures_df = futures_df.dropna()
+
+futures_pct = futures_df.pct_change().dropna()
+futures_pct = futures_pct.shift(-1).dropna()
+
+data_mom = compute_mom(futures_df, categories_lag_months)
